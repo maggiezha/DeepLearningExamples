@@ -39,7 +39,7 @@ from torch.nn.parameter import Parameter
 import torch.distributed as dist
 from torch.utils.data.distributed import DistributedSampler
 
-from apex.parallel import DistributedDataParallel as DDP
+#from apex.parallel import DistributedDataParallel as DDP
 
 import models
 import loss_functions
@@ -391,7 +391,8 @@ def main():
 
     #if not args.amp and distributed_run:
     if distributed_run:
-        model = DDP(model)
+        #model = DDP(model)
+        model = nn.parallel.DistributedDataParallel(model)
 
     optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate,
                                  weight_decay=args.weight_decay)
