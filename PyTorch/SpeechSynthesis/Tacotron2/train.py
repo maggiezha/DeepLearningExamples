@@ -392,7 +392,7 @@ def main():
 
     #if not args.amp and distributed_run:
     if distributed_run:
-        model = DDP(model)
+        model = DDP(model,device_ids=[local_rank],output_device=local_rank)
 
     optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate,
                                  weight_decay=args.weight_decay)
