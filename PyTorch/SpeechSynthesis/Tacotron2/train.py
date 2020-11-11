@@ -39,7 +39,6 @@ from torch.nn.parameter import Parameter
 import torch.distributed as dist
 from torch.utils.data.distributed import DistributedSampler
 
-#from apex.parallel import DistributedDataParallel as DDP
 from torch.nn.parallel import DistributedDataParallel as DDP
 
 import models
@@ -51,11 +50,6 @@ import dllogger as DLLogger
 from dllogger import StdOutBackend, JSONStreamBackend, Verbosity
 
 from scipy.io.wavfile import write as write_wav
-
-#from apex import amp
-#amp.lists.functional_overrides.FP32_FUNCS.remove('softmax')
-#amp.lists.functional_overrides.FP16_FUNCS.append('softmax')
-
 
 def parse_args(parser):
     """
@@ -216,7 +210,6 @@ def save_checkpoint(model, optimizer, scaler, epoch, config, amp_run, output_dir
                       'state_dict': model.state_dict(),
                       'optimizer': optimizer.state_dict()}
         if amp_run:
-            #checkpoint['amp'] = amp.state_dict()
             checkpoint = {'model': model.state_dict(), 
                           'optimizer': optimizer.state_dict(), 
                           'scaler': scaler.state_dict()}
@@ -260,7 +253,6 @@ def load_checkpoint(model, optimizer, epoch, config, amp_run, filepath, local_ra
     optimizer.load_state_dict(checkpoint['optimizer'])
 
     if amp_run:
-        #amp.load_state_dict(checkpoint['amp'])
         model.load_state_dict(checkpoint['model'])
         optimizer.load_state_dict(checkpoint['optimizer'])
         scaler.load_state_dict(checkpoint['scaler'])
@@ -390,7 +382,6 @@ def main():
                              cpu_run=False,
                              uniform_initialize_bn_weight=not args.disable_uniform_initialize_bn_weight)
 
-    #if not args.amp and distributed_run:
     if distributed_run:
         model = DDP(model,device_ids=[local_rank],output_device=local_rank)
 
@@ -398,11 +389,6 @@ def main():
                                  weight_decay=args.weight_decay)
 
     scaler = torch.cuda.amp.GradScaler(enabled=args.amp)
-    
-    #if args.amp:
-        #model, optimizer = amp.initialize(model, optimizer, opt_level="O1")
-        #if distributed_run:
-            #model = DDP(model)
 
     try:
         sigma = args.sigma
@@ -506,16 +492,11 @@ def main():
             reduced_num_items_epoch += reduced_num_items
 
             if args.amp:
-                #with amp.scale_loss(loss, optimizer) as scaled_loss:
-                    #scaled_loss.backward()
                 scaler.scale(loss).backward()
                 scaler.step(optimizer)
                 scaler.update()
                 optimizer.zero_grad(set_to_none=True)  
-                #optimizer.zero_grad()
-                
-                #grad_norm = torch.nn.utils.clip_grad_norm_(
-                    #amp.master_params(optimizer), args.grad_clip_thresh)
+
             else:
                 loss.backward()
                 grad_norm = torch.nn.utils.clip_grad_norm_(
