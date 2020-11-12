@@ -46,7 +46,7 @@ from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 
 import common.tb_dllogger as logger
-from apex import amp
+#from apex import amp
 from apex.optimizers import FusedAdam, FusedLAMB
 
 import common
@@ -172,8 +172,7 @@ def last_checkpoint(output):
         return None
 
 
-def save_checkpoint(local_rank, model, ema_model, optimizer, epoch, total_iter,
-                    config, amp_run, filepath):
+def save_checkpoint(local_rank, model, ema_model, optimizer, scaler, epoch, total_iter, config, amp_run, filepath):
     if local_rank != 0:
         return
 
@@ -186,11 +185,15 @@ def save_checkpoint(local_rank, model, ema_model, optimizer, epoch, total_iter,
                   'ema_state_dict': ema_dict,
                   'optimizer': optimizer.state_dict()}
     if amp_run:
-        checkpoint['amp'] = amp.state_dict()
+        #checkpoint['amp'] = amp.state_dict()
+        checkpoint = {"model": model.state_dict(),
+	              "optimizer": optimizer.state_dict(),
+		      "scaler": scaler.state_dict()}
+
     torch.save(checkpoint, filepath)
 
 
-def load_checkpoint(local_rank, model, ema_model, optimizer, epoch, total_iter,
+def load_checkpoint(local_rank, model, ema_model, optimizer, scaler, epoch, total_iter,
                     config, amp_run, filepath, world_size):
     if local_rank == 0:
         print(f'Loading model and optimizer state from {filepath}')
@@ -205,7 +208,10 @@ def load_checkpoint(local_rank, model, ema_model, optimizer, epoch, total_iter,
     optimizer.load_state_dict(checkpoint['optimizer'])
 
     if amp_run:
-        amp.load_state_dict(checkpoint['amp'])
+        #amp.load_state_dict(checkpoint['amp'])
+        model.load_state_dict(checkpoint["model"])
+        optimizer.load_state_dict(checkpoint["optimizer"])
+        scaler.load_state_dict(checkpoint["scaler"])
 
     if ema_model is not None:
         ema_model.load_state_dict(checkpoint['ema_state_dict'])
@@ -336,8 +342,10 @@ def main():
     else:
         raise ValueError
 
-    if args.amp:
-        model, optimizer = amp.initialize(model, optimizer, opt_level="O1")
+    scaler = torch.cuda.amp.GradScaler(enabled=args.amp)
+
+    #if args.amp:
+        #model, optimizer = amp.initialize(model, optimizer, opt_level="O1")
 
     if args.ema_decay > 0:
         ema_model = copy.deepcopy(model)
@@ -426,16 +434,20 @@ def main():
                 model.zero_grad()
 
             x, y, num_frames = batch_to_gpu(batch)
-            y_pred = model(x, use_gt_durations=True)
-            loss, meta = criterion(y_pred, y)
 
-            loss /= args.gradient_accumulation_steps
+	    #AMP upstream autocast
+            with torch.cuda.amp.autocast(enabled=args.amp):
+                y_pred = model(x, use_gt_durations=True)
+                loss, meta = criterion(y_pred, y)
+
+                loss /= args.gradient_accumulation_steps
             meta = {k: v / args.gradient_accumulation_steps
                     for k, v in meta.items()}
 
             if args.amp:
-                with amp.scale_loss(loss, optimizer) as scaled_loss:
-                    scaled_loss.backward()
+                #with amp.scale_loss(loss, optimizer) as scaled_loss:
+                    #scaled_loss.backward()
+                scaler.scale(loss).backward()
             else:
                 loss.backward()
 
@@ -458,13 +470,17 @@ def main():
 
                 logger.log_grads_tb(total_iter, model)
                 if args.amp:
-                    torch.nn.utils.clip_grad_norm_(
-                        amp.master_params(optimizer), args.grad_clip_thresh)
+                    scaler.unscale_(optimizer)
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip_thresh)
+                    scaler.step(optimizer)
+                    scaler.update()
+                    #optimizer.zero_grad(set_to_none=True)
+                    optimizer.zero_grad()
                 else:
                     torch.nn.utils.clip_grad_norm_(
                         model.parameters(), args.grad_clip_thresh)
 
-                optimizer.step()
+                    optimizer.step()
                 apply_ema_decay(model, ema_model, args.ema_decay)
 
                 iter_time = time.perf_counter() - iter_start_time
@@ -517,7 +533,7 @@ def main():
 
             checkpoint_path = os.path.join(
                 args.output, f"FastPitch_checkpoint_{epoch}.pt")
-            save_checkpoint(args.local_rank, model, ema_model, optimizer, epoch,
+            save_checkpoint(args.local_rank, model, ema_model, optimizer, scaler, epoch,
                             total_iter, model_config, args.amp, checkpoint_path)
         logger.flush()
 
@@ -538,7 +554,7 @@ def main():
         (epoch % args.epochs_per_checkpoint != 0) and args.local_rank == 0):
         checkpoint_path = os.path.join(
             args.output, f"FastPitch_checkpoint_{epoch}.pt")
-        save_checkpoint(args.local_rank, model, ema_model, optimizer, epoch,
+        save_checkpoint(args.local_rank, model, ema_model, optimizer, scaler, epoch,
                         total_iter, model_config, args.amp, checkpoint_path)
 
 
